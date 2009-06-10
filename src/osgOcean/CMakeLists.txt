@@ -1,55 +1,82 @@
 SET(HEADER_PATH ${osgOcean_SOURCE_DIR}/include/osgOcean )
 
 SET( SHADER_FILES
-  ${osgOcean_SOURCE_DIR}/resources/shaders/water.f
-  ${osgOcean_SOURCE_DIR}/resources/shaders/water.v
-  
+  ${osgOcean_SOURCE_DIR}/resources/shaders/water.frag
+  ${osgOcean_SOURCE_DIR}/resources/shaders/water.vert
+  ${osgOcean_SOURCE_DIR}/resources/shaders/godrays.vert
+  ${osgOcean_SOURCE_DIR}/resources/shaders/godrays.frag
+  ${osgOcean_SOURCE_DIR}/resources/shaders/godray_screen_blend.vert
+  ${osgOcean_SOURCE_DIR}/resources/shaders/godray_screen_blend.frag  
+  ${osgOcean_SOURCE_DIR}/resources/shaders/godray_glare.vert  
+  ${osgOcean_SOURCE_DIR}/resources/shaders/godray_glare.frag  
+  ${osgOcean_SOURCE_DIR}/resources/shaders/silt_quads.vert  
+  ${osgOcean_SOURCE_DIR}/resources/shaders/silt_quads.frag  
+  ${osgOcean_SOURCE_DIR}/resources/shaders/silt_points.vert 
+  ${osgOcean_SOURCE_DIR}/resources/shaders/silt_points.frag 
+  ${osgOcean_SOURCE_DIR}/resources/shaders/streak.vert 
+  ${osgOcean_SOURCE_DIR}/resources/shaders/streak.frag 
+  ${osgOcean_SOURCE_DIR}/resources/shaders/glare_composite.vert 
+  ${osgOcean_SOURCE_DIR}/resources/shaders/glare_composite.frag 
+  ${osgOcean_SOURCE_DIR}/resources/shaders/default_scene.vert 
+  ${osgOcean_SOURCE_DIR}/resources/shaders/default_scene.frag 
 )
 
 SET( TEXTURE_FILES
   ${osgOcean_SOURCE_DIR}/resources/textures/sea_foam.png
+  ${osgOcean_SOURCE_DIR}/resources/textures/sun_glare.png
 )
 
 SET( LIB_HEADERS
-
   ${HEADER_PATH}/DynamicShader
+  ${HEADER_PATH}/DistortionSurface
   ${HEADER_PATH}/FFTOceanSurface
   ${HEADER_PATH}/FFTSimulation
+  ${HEADER_PATH}/GodRays
+  ${HEADER_PATH}/GodRayBlendSurface
   ${HEADER_PATH}/MipmapGeometry
   ${HEADER_PATH}/OceanScene
   ${HEADER_PATH}/OceanTechnique
   ${HEADER_PATH}/OceanTile
+  ${HEADER_PATH}/ScreenAlignedQuad
+  ${HEADER_PATH}/SiltEffect
+  ${HEADER_PATH}/WaterTrochoids
   ${HEADER_PATH}/Export
 )
 
 ADD_DEFINITIONS(-DOSGOCEAN_LIBRARY)
 
-include_directories (
+INCLUDE_DIRECTORIES (
    ${OSG_INCLUDE_DIR}
-   ${FFTW3F-3_INCLUDE_DIR}
+   ${FFTSS_INCLUDE_DIR}
    ${osgOcean_SOURCE_DIR}/include/ 
 )
 
-add_library(
+ADD_LIBRARY(
   osgOcean
   SHARED
   ${LIB_HEADERS}
+  DistortionSurface.cpp
   DynamicShader.cpp
   FFTOceanSurface.cpp
   FFTSimulation.cpp
+  GodRays.cpp
+  GodRayBlendSurface.cpp
   MipmapGeometry.cpp
   OceanScene.cpp
   OceanTechnique.cpp
   OceanTile.cpp
+  ScreenAlignedQuad.cpp
+  SiltEffect.cpp
+  WaterTrochoids.cpp
 )
 
-set_target_properties(
+SET_TARGET_PROPERTIES(
   osgOcean
   PROPERTIES FRAMEWORK TRUE
   PUBLIC_HEADER "${LIB_HEADERS}"
 )
 
-target_link_libraries(
+TARGET_LINK_LIBRARIES(
   osgOcean
 
   optimized ${OSG_LIBRARY}
@@ -60,25 +87,26 @@ target_link_libraries(
   debug ${OSGDB_LIBRARY_DEBUG}
   optimized ${OPENTHREADS_LIBRARY}
   debug ${OPENTHREADS_LIBRARY_DEBUG}
-
-  ${FFTW3F-3_LIBRARY}
+  optimized ${OPENGL_LIBRARY}
+  debug ${OPENGL_LIBRARY_DEBUG}
+  optimized ${FFTSS_LIBRARY}
+  debug ${FFTSS_LIBRARY}
 )
 
-install(
+INSTALL(
   TARGETS osgOcean
   LIBRARY DESTINATION ${CMAKE_INSTALL_PREFIX}/bin
   RUNTIME DESTINATION ${CMAKE_INSTALL_PREFIX}/bin
   ARCHIVE DESTINATION ${CMAKE_INSTALL_PREFIX}/lib
   PUBLIC_HEADER DESTINATION ${CMAKE_INSTALL_PREFIX}/include
-  
 )
 
-install(
+INSTALL(
   FILES ${SHADER_FILES}
-  DESTINATION ${CMAKE_INSTALL_PREFIX}/resources/shaders
+  DESTINATION ${CMAKE_INSTALL_PREFIX}/bin/resources/shaders
 )
 
-install(
+INSTALL(
   FILES ${TEXTURE_FILES}
-  DESTINATION ${CMAKE_INSTALL_PREFIX}/resources/textures
+  DESTINATION ${CMAKE_INSTALL_PREFIX}/bin/resources/textures
 )

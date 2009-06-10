@@ -1,4 +1,27 @@
+/*
+* This source file is part of the osgOcean library
+* 
+* Copyright (C) 2009 Kim Bale
+* Copyright (C) 2009 The University of Hull, UK
+* 
+* This program is free software; you can redistribute it and/or modify it under
+* the terms of the GNU Lesser General Public License as published by the Free Software
+* Foundation; either version 3 of the License, or (at your option) any later
+* version.
+
+* This program is distributed in the hope that it will be useful, but WITHOUT
+* ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+* FOR A PARTICULAR PURPOSE. See the GNU Lesser General Public License for more details.
+* http://www.gnu.org/copyleft/lesser.txt.
+*/
+
 #include <osgOcean/OceanTile>
+
+#ifdef DEBUG_DATA
+#include <osgDB/WriteFile>
+#include <fstream>
+#include <sstream>
+#endif
 
 using namespace osgOcean;
 
@@ -45,7 +68,6 @@ OceanTile::OceanTile( osg::FloatArray* heights,
 	}
 
 	computeNormals();
-	_normalMap = createNormalMap();
 	//computeMaxDelta();
 }
 
@@ -64,18 +86,18 @@ OceanTile::OceanTile( osg::FloatArray* heights,
 {
 	_vertices->reserve( _numVertices );
 
+#ifdef DEBUG_DATA
+	static int count = 0;
+	std::stringstream ss;
+	ss << "Tile_" << count << ".txt";
+	std::ofstream outFile( ss.str().c_str() );
+	outFile << _rowLength << std::endl;
+	++count;
+#endif
+
 	float x1,y1;
-	osg::Vec3f v;
-
 	float sumHeights = 0.f;
-
-	//debug
-	//static int count = 0;
-	//std::stringstream ss;
-	//ss << "Tile_" << count << ".txt";
-	//std::ofstream outFile( ss.str().c_str() );
-	//outFile << _rowLength << std::endl;
-	//++count;
+	osg::Vec3f v;
 
 	for(int y = 0; y <= (int)_resolution; ++y )
 	{
@@ -91,24 +113,24 @@ OceanTile::OceanTile( osg::FloatArray* heights,
 			v.y() = displacements->at(ptr).y();
 			v.z() = heights->at( ptr );
 
-			// debug
-			//outFile << v.x() << std::endl;
-			//outFile << v.y() << std::endl;
-			//outFile << v.z() << std::endl;
-
+#ifdef DEBUG_DATA
+			outFile << v.x() << std::endl;
+			outFile << v.y() << std::endl;
+			outFile << v.z() << std::endl;
+#endif
 			sumHeights += v.z();
 
 			_vertices->push_back( v );
 		}
 	}
 
-	// debug
-	//outFile.close();
+#ifdef DEBUG_DATA
+	outFile.close();
+#endif
 
 	_averageHeight = sumHeights / (float)_vertices->size();
 
 	computeNormals();
-	_normalMap = createNormalMap();
 	//computeMaxDelta();
 }
 
@@ -118,7 +140,7 @@ OceanTile::OceanTile( const OceanTile& tile,
 	_resolution	( resolution ),
 	_rowLength	( _resolution + 1 ),
 	_numVertices( _rowLength*_rowLength ),
-	_vertices	( new osg::Vec3Array ),
+	_vertices	( new osg::Vec3Array(_numVertices) ),
 	_normals		( new osg::Vec3Array(_numVertices) ),
 	_spacing		( spacing ),
 	_maxDelta	( 0.f )
@@ -126,8 +148,6 @@ OceanTile::OceanTile( const OceanTile& tile,
 	unsigned int parentRes = tile.getResolution();
 	unsigned int inc = parentRes/_resolution;
 	unsigned int inc2 = inc/2;
-
-	_vertices->resize( _numVertices );
 
 	// Take an average of four points
 	for (unsigned int y = 0; y < parentRes; y+=inc) 
@@ -163,7 +183,6 @@ OceanTile::OceanTile( const OceanTile& tile,
 OceanTile::OceanTile( const OceanTile& copy ):
 	_vertices		( copy._vertices ),
 	_normals			( copy._normals ),
-	_normalMap		( copy._normalMap ),
 	_resolution		( copy._resolution ),
 	_rowLength		( copy._rowLength ),
 	_numVertices	( copy._numVertices ),
@@ -185,7 +204,6 @@ OceanTile& OceanTile::operator=(const OceanTile& rhs)
 	{
 		_vertices		= rhs._vertices;
 		_normals			= rhs._normals;
-		_normalMap		= rhs._normalMap;
 		_resolution		= rhs._resolution;
 		_rowLength		= rhs._rowLength;
 		_numVertices	= rhs._numVertices;
@@ -310,11 +328,8 @@ float OceanTile::biLinearInterp(int lx, int hx, int ly, int hy, int tx, int ty )
 	return value;
 }
 
-osg::ref_ptr<osg::Texture2D> OceanTile::createNormalMap( void ) const 
+osg::ref_ptr<osg::Texture2D> OceanTile::createNormalMap( void ) 
 {
-	if( !_normals.valid() )
-		return NULL;
-
 	osg::ref_ptr<osg::Texture2D> texture = new osg::Texture2D;
 
 	unsigned char* pixels = new unsigned char[_resolution*_resolution*3];	
@@ -339,12 +354,14 @@ osg::ref_ptr<osg::Texture2D> OceanTile::createNormalMap( void ) const
 	osg::Image* img = new osg::Image;
 	img->setImage(_resolution, _resolution, 1, GL_RGB, GL_RGB, GL_UNSIGNED_BYTE, pixels, osg::Image::USE_NEW_DELETE, 1);
 
-	// debug
-	//static int count = 0;
-	//std::stringstream ss;
-	//ss << "Tile_" << count << ".bmp";
-	//osgDB::writeImageFile( *img, ss.str() );
-	//++count;
+#ifdef DEBUG_DATA
+	// saves normal map as image
+	static int count = 0;
+	std::stringstream ss;
+	ss << "Tile_" << count << ".bmp";
+	osgDB::writeImageFile( *img, ss.str() );
+	++count;
+#endif
 
 	texture->setFilter( osg::Texture::MIN_FILTER, osg::Texture::LINEAR_MIPMAP_LINEAR );
 	texture->setFilter( osg::Texture::MAG_FILTER, osg::Texture::LINEAR );

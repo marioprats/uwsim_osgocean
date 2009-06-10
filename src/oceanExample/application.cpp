@@ -1,7 +1,25 @@
+/*
+* This source file is part of the osgOcean library
+* 
+* Copyright (C) 2009 Kim Bale
+* Copyright (C) 2009 The University of Hull, UK
+* 
+* This program is free software; you can redistribute it and/or modify it under
+* the terms of the GNU Lesser General Public License as published by the Free Software
+* Foundation; either version 3 of the License, or (at your option) any later
+* version.
+
+* This program is distributed in the hope that it will be useful, but WITHOUT
+* ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+* FOR A PARTICULAR PURPOSE. See the GNU Lesser General Public License for more details.
+* http://www.gnu.org/copyleft/lesser.txt.
+*/
 
 #include <osgViewer/Viewer>
 #include <osgViewer/ViewerEventHandlers>
 #include <osgGA/FlightManipulator>
+#include <osgGA/TrackballManipulator>
+#include <osgGA/DriveManipulator>
 #include <osgGA/StateSetManipulator>
 #include <osgGA/GUIEventHandler>
 #include <osg/Notify>
@@ -12,15 +30,27 @@
 #include <osg/PositionAttitudeTransform>
 #include <osg/Program>
 #include <osgText/Text>
+#include <osg/CullFace>
 #include <osg/Fog>
+#include <osgText/Font>
+#include <osg/Switch>
+#include <osg/Texture3D>
 
 #include <string>
 #include <vector>
 
 #include <osgOcean/OceanScene>
 #include <osgOcean/FFTOceanSurface>
+#include <osgOcean/SiltEffect>
 
 #include "SkyDome.h"
+#include "Cylinder.h"
+
+#define USE_CUSTOM_SHADER
+
+// ----------------------------------------------------
+//                  Text HUD Class
+// ----------------------------------------------------
 
 class TextHUD : public osg::Referenced
 {
@@ -54,16 +84,22 @@ public:
 		osg::Geode* textGeode = new osg::Geode;
 
 		osgText::Text* title = new osgText::Text;
-		title->setLineSpacing(-0.35f);
+		title->setFont("fonts/arial.ttf");
+		title->setCharacterSize(14);
+		title->setLineSpacing(0.4f);
 		title->setText("osgOcean\nPress 1-3 to change presets\nPress 'C' to change camera");
 		textGeode->addDrawable( title );
 
 		_modeText = new osgText::Text;
+		_modeText->setFont("fonts/arial.ttf");
+		_modeText->setCharacterSize(14);
 		_modeText->setPosition( osg::Vec3f(0.f, -60.f, 0.f ) );
 		_modeText->setDataVariance(osg::Object::DYNAMIC);
 		textGeode->addDrawable( _modeText );
 
 		_cameraModeText = new osgText::Text;
+		_cameraModeText->setFont("fonts/arial.ttf");
+		_cameraModeText->setCharacterSize(14);
 		_cameraModeText->setPosition( osg::Vec3f(0.f, -80.f, 0.f ) );
 		_cameraModeText->setDataVariance(osg::Object::DYNAMIC);
 		textGeode->addDrawable( _cameraModeText );
@@ -85,10 +121,57 @@ public:
 		_cameraModeText->setText( "Camera: " + mode );
 	}
 
-	osg::Camera* getHudCamera(void){
+	osg::Camera* getHudCamera(void)
+	{
 		return _camera.get();
 	}
 };
+
+// ----------------------------------------------------
+//               Camera Track Callback
+// ----------------------------------------------------
+
+class CameraTrackDataType: public osg::Referenced
+{
+private:
+	osg::Vec3f _eye;
+	osg::PositionAttitudeTransform& _pat;
+
+public:
+	CameraTrackDataType( osg::PositionAttitudeTransform& pat ):_pat(pat){};
+
+	inline void setEye( const osg::Vec3f& eye ){ _eye = eye; }
+
+	inline void update(void){
+		_pat.setPosition( osg::Vec3f(_eye.x(), _eye.y(), _pat.getPosition().z() ) );
+	}
+};
+
+class CameraTrackCallback: public osg::NodeCallback
+{
+public:
+	virtual void operator()(osg::Node* node, osg::NodeVisitor* nv)
+	{
+		osg::ref_ptr<CameraTrackDataType> data = dynamic_cast<CameraTrackDataType*> ( node->getUserData() );
+
+		if( nv->getVisitorType() == osg::NodeVisitor::CULL_VISITOR )
+		{
+			osgUtil::CullVisitor* cv = static_cast<osgUtil::CullVisitor*>(nv);
+			osg::Vec3f eye,centre,up;
+			cv->getCurrentCamera()->getViewMatrixAsLookAt(eye,centre,up);
+			data->setEye(eye);
+		}
+		else if(nv->getVisitorType() == osg::NodeVisitor::UPDATE_VISITOR ){
+			data->update();
+		}
+
+		traverse(node, nv); 
+	}
+};
+
+// ----------------------------------------------------
+//                  Scene Model
+// ----------------------------------------------------
 
 class SceneModel : public osg::Referenced
 {
@@ -103,10 +186,9 @@ private:
 
 	osg::ref_ptr<osgOcean::OceanScene> _oceanScene;
 	osg::ref_ptr<osgOcean::FFTOceanSurface> _oceanSurface;
-	osg::ref_ptr<osg::Fog> _fog;
 	osg::ref_ptr<osg::TextureCubeMap> _cubemap;
 	osg::ref_ptr<SkyDome> _skyDome;
-	osg::ref_ptr<osg::Vec4Array> _oceanBoxColor;
+	osg::ref_ptr<Cylinder> _oceanCylinder;
 		
 	std::vector<std::string> _cubemapDirs;
 	std::vector<osg::Vec4f>  _lightColors;
@@ -116,97 +198,158 @@ private:
 
 	std::vector<osg::Vec3f>  _sunPositions;
 	std::vector<osg::Vec4f>  _sunDiffuse;
-	std::vector<osg::Vec4f>  _waterfogColors;
+	std::vector<osg::Vec4f>  _waterFogColors;
 
+	osg::ref_ptr<osg::Switch> _islandSwitch;
 
 public:
-	SceneModel( void ):
+	SceneModel( const osg::Vec2f& windDirection = osg::Vec2f(1.0f,1.0f),
+               float windSpeed = 12.f,
+               float depth = 10000.f,
+					float scale = 1e-8,
+               bool  isChoppy = true,
+               float choppyFactor = -2.5f,
+               float crestFoamHeight = 2.2f ):
 		_sceneType(CLEAR)
 	{
 		_cubemapDirs.push_back( "sky_clear" );
 		_cubemapDirs.push_back( "sky_dusk" );
 		_cubemapDirs.push_back( "sky_fair_cloudy" );
 
-		_fogColors.push_back( intColor( 195,221,254 ) );
-		_fogColors.push_back( intColor( 248,241,189 ) );
+		_fogColors.push_back( intColor( 199,226,255 ) );
+		_fogColors.push_back( intColor( 244,228,179 ) );
 		_fogColors.push_back( intColor( 172,224,251 ) );
 
+		//_waterFogColors.push_back( intColor(70,113,174 ) );
+		//_waterFogColors.push_back( intColor(28,48,108) );
+		_waterFogColors.push_back( intColor(27,57,109) );
+		_waterFogColors.push_back( intColor(44,69,106 ) );
+		_waterFogColors.push_back( intColor(84,135,172 ) );
+
 		_lightColors.push_back( intColor( 105,138,174 ) );
 		_lightColors.push_back( intColor( 105,138,174 ) );
 		_lightColors.push_back( intColor( 105,138,174 ) );
 
-		_sunPositions.push_back( osg::Vec3f(410.f, 1480.f, 1510.f) );
+		_sunPositions.push_back( osg::Vec3f(326.573, 1212.99 ,1275.19) );
 		_sunPositions.push_back( osg::Vec3f(520.f, 1900.f, 550.f ) );
-		_sunPositions.push_back( osg::Vec3f(410.f, 1480.f, 1510.f) );
+		_sunPositions.push_back( osg::Vec3f(-1056.89f, -771.886f, 1221.18f ) );
 
 		_sunDiffuse.push_back( intColor( 191, 191, 191 ) );
 		_sunDiffuse.push_back( intColor( 251, 251, 161 ) );
-		_sunDiffuse.push_back( intColor( 251, 251, 161 ) );
+		_sunDiffuse.push_back( intColor( 191, 191, 191 ) );
 
-		_waterfogColors.push_back( intColor(70,113,174 ) );
-		_waterfogColors.push_back( intColor(44,69,106 ) );
-		_waterfogColors.push_back( intColor(84,135,172 ) );
-
-		build();
+		build(windDirection, windSpeed, depth, scale, isChoppy, choppyFactor, crestFoamHeight);
 	}
 
-	void build( void )
+	void build( const osg::Vec2f& windDirection,
+               float windSpeed,
+               float depth,
+					float waveScale,
+               bool  isChoppy,
+               float choppyFactor,
+               float crestFoamHeight )
 	{
+		osg::notify(osg::NOTICE) << "Building scene... ";
+		osg::Timer_t startTick = osg::Timer::instance()->tick();
+
 		_scene = new osg::Group; 
 
 		_cubemap = loadCubeMapTextures( _cubemapDirs[_sceneType] );
 
-		// Set up fogging
-		_fog = new osg::Fog;
-		_fog->setStart(0.f);
-		_fog->setEnd(1800.f);
-		_fog->setMode(osg::Fog::LINEAR);
-		_fog->setColor( _fogColors[_sceneType] ); 
-		
 		// Set up surface
-		_oceanSurface = new osgOcean::FFTOceanSurface( 64, 256, 15, osg::Vec2f(1.1f,1.1f), 12.f, 10000.f, true, -2.5f, 10.f, 256 );		
+		_oceanSurface = new osgOcean::FFTOceanSurface( 64, 256, 17, 
+			windDirection, windSpeed, depth, waveScale, isChoppy, choppyFactor, 10.f, 256 );  
+
 		_oceanSurface->setEnvironmentMap( _cubemap.get() );
-		_oceanSurface->setFoamHeight( 2.2f );
+		_oceanSurface->setFoamBottomHeight( 2.2f );
+		_oceanSurface->setFoamTopHeight( 3.0f );
 		_oceanSurface->enableCrestFoam( true );
 		_oceanSurface->setLightColor( _lightColors[_sceneType] );
+		_oceanSurface->enableEndlessOcean(true);
 
 		// Set up ocean scene, add surface
-		_oceanScene = new osgOcean::OceanScene( _oceanSurface.get() );
+		osg::Vec3f sunDir = -_sunPositions[_sceneType];
+		sunDir.normalize();
+		
+		_oceanScene = new osgOcean::OceanScene( _oceanSurface );
 		_oceanScene->setLightID(0);
 		_oceanScene->enableReflections(true);
 		_oceanScene->enableRefractions(true);
-		_oceanScene->getOrCreateStateSet()->setAttributeAndModes(_fog.get(),osg::StateAttribute::ON);
-		_oceanScene->setUnderwaterFogColor( _waterfogColors[_sceneType] );
+		
+		_oceanScene->setAboveWaterFog(0.0012f, _fogColors[_sceneType] );
+		_oceanScene->setUnderwaterFog(0.006f,  _waterFogColors[_sceneType] );
+		_oceanScene->setUnderwaterDiffuse( osg::Vec4f( 0.12549019f,0.30980392f,0.5f,1.0f ) );
+		
+		_oceanScene->setSunDirection( sunDir );
+		_oceanScene->enableGodRays(true);
+		_oceanScene->enableSilt(true);
+		_oceanScene->enableUnderwaterDOF(true);
+		_oceanScene->enableGlare(true);
+		_oceanScene->setGlareAttenuation(0.8f);
 
 		// create sky dome and add to ocean scene
-		_skyDome = new SkyDome( 2000.f, 16, 16, _cubemap.get() );
 		// set masks so it appears in reflected scene and normal scene
+		_skyDome = new SkyDome( 1900.f, 16, 16, _cubemap.get() );
 		_skyDome->setNodeMask( _oceanScene->getReflectedSceneMask() | _oceanScene->getNormalSceneMask() );
 
+		_oceanCylinder = new Cylinder(1900.f, 999.8f, 16, false, true );
+		_oceanCylinder->setColor( _waterFogColors[_sceneType] );
+		_oceanCylinder->getOrCreateStateSet()->setMode(GL_LIGHTING, osg::StateAttribute::OFF);
+		_oceanCylinder->getOrCreateStateSet()->setMode(GL_FOG, osg::StateAttribute::OFF);
+		
+		osg::Geode* oceanCylinderGeode = new osg::Geode;
+		oceanCylinderGeode->addDrawable(_oceanCylinder.get());
+		oceanCylinderGeode->setNodeMask( _oceanScene->getNormalSceneMask() );
+
+		osg::PositionAttitudeTransform* cylinderPat = new osg::PositionAttitudeTransform;
+		cylinderPat->setPosition( osg::Vec3f(0.f, 0.f, -1000.f) );
+		cylinderPat->addChild( oceanCylinderGeode );
+
+		// add a pat to track the camera
 		osg::PositionAttitudeTransform* pat = new osg::PositionAttitudeTransform;
-		pat->setPosition( osg::Vec3f(0.f, 0.f, -1.f ) );
+		pat->setDataVariance( osg::Object::DYNAMIC );
+		pat->setPosition( osg::Vec3f(0.f, 0.f, 0.f) );
+		pat->setUserData( new CameraTrackDataType(*pat) );
+		pat->setUpdateCallback( new CameraTrackCallback );
+		pat->setCullCallback( new CameraTrackCallback );
+		
 		pat->addChild( _skyDome.get() );
-				
+		pat->addChild( cylinderPat );
+
 		_oceanScene->addChild( pat );
 
-		_scene->addChild( _oceanScene.get() );
+		osg::ref_ptr<osg::Node> islandModel = loadIslands();
+
+		if( islandModel.valid() )
+		{
+			_islandSwitch = new osg::Switch;
+			_islandSwitch->addChild( islandModel, true );
+			_islandSwitch->setNodeMask( _oceanScene->getNormalSceneMask() | _oceanScene->getReflectedSceneMask() | _oceanScene->getRefractedSceneMask() );
+			_oceanScene->addChild( _islandSwitch );
+		}
 
 		osg::LightSource* lightSource = new osg::LightSource;
 		lightSource->setLocalStateSetModes();
-
+	
 		_light = lightSource->getLight();
 		_light->setLightNum(0);
-		_light->setAmbient( osg::Vec4d(0.3f, 0.3f,	0.3f,	1.0f ));
+		_light->setAmbient( osg::Vec4d(0.3f, 0.3f, 0.3f, 1.0f ));
 		_light->setDiffuse( _sunDiffuse[_sceneType] );
-		_light->setSpecular(osg::Vec4d(1.0f, 1.0f,	1.0f,	1.0f ));
+		_light->setSpecular(osg::Vec4d( 0.1f, 0.1f, 0.1f, 1.0f ) );
 		_light->setPosition( osg::Vec4f(_sunPositions[_sceneType],1.f) ); // point light
 
 		_scene->addChild( lightSource );
+		_scene->addChild( _oceanScene.get() );
+		//_scene->addChild( sunDebug(_sunPositions[CLOUDY]) );
 
-		_oceanBoxColor = new osg::Vec4Array(1);
-		_oceanBoxColor->at(0) = _waterfogColors[_sceneType];
+		osg::Timer_t endTick = osg::Timer::instance()->tick();
 
-		_scene->addChild( oceanBox( _oceanBoxColor.get() ) );
+		osg::notify(osg::NOTICE) << "complete.\nTime Taken: " << osg::Timer::instance()->delta_s(startTick,endTick) << "s\n";
+	}
+
+	osg::Node* getOceanSurface( void )
+	{
+		return _oceanSurface.get();
 	}
 
 	osg::Group* getScene(void){
@@ -217,20 +360,77 @@ public:
 	{
 		_sceneType = type;
 
-		_fog->setColor( _fogColors[_sceneType] ); 
-
 		_cubemap = loadCubeMapTextures( _cubemapDirs[_sceneType] );
-		
-		_skyDome->setCubeMap( _cubemap.get() );
-		
-		_oceanSurface->setEnvironmentMap( _cubemap.get() );
+		_skyDome->setCubeMap( _cubemap );
+		_oceanSurface->setEnvironmentMap( _cubemap );
 		_oceanSurface->setLightColor( _lightColors[type] );
-		_oceanScene->setUnderwaterFogColor( _waterfogColors[_sceneType] );
+
+		_oceanScene->setAboveWaterFog(0.0012f, _fogColors[_sceneType] );
+		_oceanScene->setUnderwaterFog(0.006f,  _waterFogColors[_sceneType] );
+		
+		osg::Vec3f sunDir = -_sunPositions[_sceneType];
+		sunDir.normalize();
+
+		_oceanScene->setSunDirection( sunDir );
 
 		_light->setPosition( osg::Vec4f(_sunPositions[_sceneType],1.f) );
 		_light->setDiffuse( _sunDiffuse[_sceneType] ) ;
 
-		_oceanBoxColor->at(0) = _waterfogColors[_sceneType];
+		_oceanCylinder->setColor( _waterFogColors[_sceneType] );
+
+		if(_islandSwitch.valid() )
+		{
+			if(_sceneType == CLEAR || _sceneType == CLOUDY)
+				_islandSwitch->setAllChildrenOn();
+			else
+				_islandSwitch->setAllChildrenOff();
+		}
+	}
+
+	// Load the islands model
+	// Here we attach a custom shader to the model.
+	// This shader overrides the default shader applied by OceanScene, but uses uniforms applied by OceanScene.
+	// The custom shader is needed to add multitexturing and bump mapping to the terrain.
+	osg::Node* loadIslands(void)
+	{
+		osg::Node* island = osgDB::readNodeFile("resources/island/islands.osg");
+
+		if(!island){
+			osg::notify(osg::WARN) << "Could not find: resources/island/islands.osg" << std::endl;
+			return NULL;
+		}
+
+#ifdef USE_CUSTOM_SHADER
+		osg::ref_ptr<osg::Shader> vertex = new osg::Shader(osg::Shader::VERTEX);
+		osg::ref_ptr<osg::Shader> fragment = new osg::Shader(osg::Shader::FRAGMENT);
+		
+		if(!vertex->loadShaderSourceFromFile("resources/shaders/terrain.vert"))
+			return NULL;
+		if(!fragment->loadShaderSourceFromFile("resources/shaders/terrain.frag"))
+			return NULL;
+
+		vertex->setName("terrain_vertex");
+		fragment->setName("terrain_fragment");
+
+		osg::Program* program = new osg::Program;
+		program->addShader( vertex );
+		program->addShader( fragment );
+		program->addBindAttribLocation("aTangent", 6);
+#endif
+		island->setNodeMask( _oceanScene->getNormalSceneMask() | _oceanScene->getReflectedSceneMask() | _oceanScene->getRefractedSceneMask() );
+		island->getStateSet()->addUniform( new osg::Uniform( "uTextureMap", 0 ) );
+
+#ifdef USE_CUSTOM_SHADER
+		island->getOrCreateStateSet()->setAttributeAndModes(program,osg::StateAttribute::ON);
+		island->getStateSet()->addUniform( new osg::Uniform( "uOverlayMap", 1 ) );
+		island->getStateSet()->addUniform( new osg::Uniform( "uNormalMap",  2 ) );
+#endif
+		osg::PositionAttitudeTransform* islandpat = new osg::PositionAttitudeTransform;
+		islandpat->setPosition(osg::Vec3f( -island->getBound().center()+osg::Vec3f(0.0, 0.0, -15.f) ) );
+		islandpat->setScale( osg::Vec3f(4.f, 4.f, 3.f ) );
+		islandpat->addChild(island);
+
+		return islandpat;
 	}
 
 	osg::ref_ptr<osg::TextureCubeMap> loadCubeMapTextures( const std::string& dir )
@@ -264,59 +464,6 @@ public:
 		return cubeMap;
 	}
 
-	osg::Geode* oceanBox( osg::Vec4Array* color )
-	{
-		osg::Geode* geode = new osg::Geode;
-		
-		geode->getOrCreateStateSet()->setMode(GL_LIGHTING, osg::StateAttribute::OFF);
-
-		osg::Geometry* geom = new osg::Geometry;
-		geom->setUseDisplayList(false);
-		
-		osg::Vec3Array* vertices = new osg::Vec3Array;
-
-		// bottom set;
-		vertices->push_back( osg::Vec3f(-2000.f, -2000.f, -1000.f ) );	// A
-		vertices->push_back( osg::Vec3f( 2000.f, -2000.f, -1000.f ) ); // B
-		vertices->push_back( osg::Vec3f( 2000.f,  2000.f, -1000.f ) ); // C
-		vertices->push_back( osg::Vec3f(-2000.f,  2000.f, -1000.f ) ); // D
-		// top set
-		vertices->push_back( osg::Vec3f(-2000.f, -2000.f, 10.f ) ); // E
-		vertices->push_back( osg::Vec3f( 2000.f, -2000.f, 10.f ) ); // F
-		vertices->push_back( osg::Vec3f( 2000.f,  2000.f, 10.f ) ); // G
-		vertices->push_back( osg::Vec3f(-2000.f,  2000.f, 10.f ) ); // H
-
-		osg::DrawElementsUInt* prim = new osg::DrawElementsUInt(osg::PrimitiveSet::QUAD_STRIP,0);
-		prim->push_back( 0 );
-		prim->push_back( 4 );
-		prim->push_back( 1 );
-		prim->push_back( 5 );
-		prim->push_back( 2 );
-		prim->push_back( 6 );
-		prim->push_back( 3 );
-		prim->push_back( 7 );
-		prim->push_back( 0 );
-		prim->push_back( 4 );
-
-		geom->addPrimitiveSet( prim );
-
-		osg::DrawElementsUInt* base =  new osg::DrawElementsUInt( osg::PrimitiveSet::QUADS, 0 );
-		base->push_back( 0 );
-		base->push_back( 3 );
-		base->push_back( 2 );
-		base->push_back( 1 );
-
-		geom->addPrimitiveSet( base );
-
-		geom->setVertexArray( vertices );
-		geom->setColorArray( color );
-		geom->setColorBinding( osg::Geometry::BIND_OVERALL );
-
-		geode->addDrawable( geom );
-		
-		return geode;
-	}
-
 	osg::Geode* sunDebug( const osg::Vec3f& position )
 	{
 		osg::ShapeDrawable* sphereDraw = new osg::ShapeDrawable( new osg::Sphere( position, 15.f ) );
@@ -335,6 +482,9 @@ public:
 	}
 };
 
+// ----------------------------------------------------
+//                   Event Handler
+// ----------------------------------------------------
 
 class SceneEventHandler : public osgGA::GUIEventHandler
 {
@@ -342,18 +492,31 @@ private:
 	osg::ref_ptr<SceneModel> _scene;
 	osg::ref_ptr<TextHUD> _textHUD;
 	osgViewer::Viewer& _viewer;
-	bool _isFixedCamera;
+	
+	enum CameraMode
+	{
+		FIXED,
+		FLIGHT,
+		TRACKBALL
+	};
+
+	CameraMode _currentCameraMode;
 
 public:
 	SceneEventHandler( SceneModel* scene, TextHUD* textHUD, osgViewer::Viewer& viewer ):
 		_scene(scene),
 		_textHUD(textHUD),
 		_viewer(viewer),
-		_isFixedCamera(true)
+		_currentCameraMode(FIXED)
 	{
 		_textHUD->setSceneText("Clear");
-		_textHUD->setCameraText("Fixed");
-		_viewer.getCamera()->setViewMatrixAsLookAt( osg::Vec3f(0.f,0.f,20.f), osg::Vec3f(0.f,0.f,20.f)+osg::Vec3f(0.f,1.f,0.f), osg::Vec3f(0,0,1) );
+		_textHUD->setCameraText("FIXED");
+
+		osg::Vec3f eye(0.f,0.f,20.f);
+		osg::Vec3f centre = eye+osg::Vec3f(0.f,1.f,0.f);
+		osg::Vec3f up(0.f, 0.f, 1.f);
+
+		_viewer.getCamera()->setViewMatrixAsLookAt( eye, centre, up	);
 	}
 
 	virtual bool handle(const osgGA::GUIEventAdapter& ea,osgGA::GUIActionAdapter&)
@@ -382,19 +545,29 @@ public:
 				}
 				else if(ea.getKey() == 'C' || ea.getKey() == 'c' )
 				{
-					_isFixedCamera = !_isFixedCamera;
-
-					if(_isFixedCamera){
-						_viewer.getCamera()->setViewMatrixAsLookAt( osg::Vec3f(0.f,0.f,20.f), osg::Vec3f(0.f,0.f,20.f)+osg::Vec3f(0.f,1.f,0.f), osg::Vec3f(0,0,1) );
-						_viewer.setCameraManipulator(NULL);
-						_textHUD->setCameraText("Fixed");
-					}
-					else{
+					if (_currentCameraMode == FIXED)
+					{
+						_currentCameraMode = FLIGHT;
 						osgGA::FlightManipulator* flight = new osgGA::FlightManipulator;
 						flight->setHomePosition( osg::Vec3f(0.f,0.f,20.f), osg::Vec3f(0.f,0.f,20.f)+osg::Vec3f(0.f,1.f,0.f), osg::Vec3f(0,0,1) );
 						_viewer.setCameraManipulator( flight );
-						_textHUD->setCameraText("Flight");
+						_textHUD->setCameraText("FLIGHT");
 					}
+					else if (_currentCameraMode == FLIGHT)
+					{
+						_currentCameraMode = FIXED;
+						_viewer.getCamera()->setViewMatrixAsLookAt( osg::Vec3f(0.f,0.f,20.f), osg::Vec3f(0.f,0.f,20.f)+osg::Vec3f(0.f,1.f,0.f), osg::Vec3f(0,0,1) );
+						_viewer.setCameraManipulator(NULL);
+						_textHUD->setCameraText("FIXED");
+					}
+					//else if (_currentCameraMode == TRACKBALL)
+					//{
+					//	_currentCameraMode = FIXED;
+					//	osgGA::TrackballManipulator* tb = new osgGA::TrackballManipulator;
+					//	tb->setHomePosition( osg::Vec3f(0.f,0.f,20.f), osg::Vec3f(0.f,20.f,20.f), osg::Vec3f(0,0,1) );
+					//	_viewer.setCameraManipulator( tb );
+					//	_textHUD->setCameraText("TRACKBALL");
+					//}
 				}
 			}
 		default:
@@ -405,15 +578,73 @@ public:
 
 int main(int argc, char *argv[])
 {
+	osg::ArgumentParser arguments(&argc,argv);
+	arguments.getApplicationUsage()->setApplicationName(arguments.getApplicationName());
+	arguments.getApplicationUsage()->setDescription(arguments.getApplicationName()+" is an example of osgOcean.");
+	arguments.getApplicationUsage()->setCommandLineUsage(arguments.getApplicationName()+" [options] ...");
+	arguments.getApplicationUsage()->addCommandLineOption("--windx <x>","Wind X direction. Default 1.1");
+	arguments.getApplicationUsage()->addCommandLineOption("--windy <y>","Wind Y direction. Default 1.1");
+	arguments.getApplicationUsage()->addCommandLineOption("--windSpeed <speed>","Wind speed. Default: 12");
+	arguments.getApplicationUsage()->addCommandLineOption("--depth <depth>","Depth. Default: 10000");
+	arguments.getApplicationUsage()->addCommandLineOption("--isNotChoppy","Set the waves not choppy (by default they are).");
+	arguments.getApplicationUsage()->addCommandLineOption("--choppyFactor <factor>","How choppy the waves are. Default: 2.5");
+	arguments.getApplicationUsage()->addCommandLineOption("--crestFoamHeight <height>","How high the waves need to be before foam forms on the crest. Default: 2.2 ");
+
+	unsigned int helpType = 0;
+	if ((helpType = arguments.readHelpType()))
+	{
+		arguments.getApplicationUsage()->write(std::cout, helpType);
+		return 1;
+	}
+
+	// report any errors if they have occurred when parsing the program arguments.
+	if (arguments.errors())
+	{
+		arguments.writeErrorMessages(std::cout);
+		return 1;
+	}
+
+	float windx = 1.1f, windy = 1.1f;
+	while (arguments.read("--windx", windx));
+	while (arguments.read("--windy", windy));
+	osg::Vec2f windDirection(windx, windy);
+
+	float windSpeed = 12.f;
+	while (arguments.read("--windSpeed", windSpeed));
+
+	float depth = 10000.f;
+	while (arguments.read("--depth", depth));
+
+	float scale = 1e-8;
+	while (arguments.read("--waveScale", scale ) );
+
+	bool isChoppy = true;
+	while (arguments.read("--isNotChoppy")) isChoppy = false;
+
+	float choppyFactor = 2.5f;
+	while (arguments.read("--choppyFactor", choppyFactor));
+	choppyFactor = -choppyFactor;
+
+	float crestFoamHeight = 2.2f;
+	while (arguments.read("--crestFoamHeight", crestFoamHeight));
+
+	// any option left unread are converted into errors to write out later.
+	arguments.reportRemainingOptionsAsUnrecognized();
+
+	// report any errors if they have occurred when parsing the program arguments.
+	if (arguments.errors())
+	{
+		arguments.writeErrorMessages(std::cout);
+		return 1;
+	}
+
 	osgViewer::Viewer viewer;
-	osgGA::FlightManipulator* flight = new osgGA::FlightManipulator;
-	flight->setHomePosition( osg::Vec3f(0.f,0.f,20.f), osg::Vec3f(0.f,0.f,20.f)+osg::Vec3f(0.f,1.f,0.f), osg::Vec3f(0,0,1) );
+
+	viewer.setUpViewInWindow( 150,150,1024,768, 0 );
+	viewer.addEventHandler( new osgViewer::StatsHandler );
 	viewer.addEventHandler( new osgGA::StateSetManipulator(viewer.getCamera()->getOrCreateStateSet()) );
-	viewer.setUpViewInWindow( 25,25,1024,768, 0 );
-	viewer.addEventHandler(new osgViewer::StatsHandler );
-	
 	osg::ref_ptr<TextHUD> hud = new TextHUD;
-	osg::ref_ptr<SceneModel> scene = new SceneModel;
+	osg::ref_ptr<SceneModel> scene = new SceneModel(windDirection, windSpeed, depth, scale, isChoppy, choppyFactor, crestFoamHeight);
 	viewer.addEventHandler( new SceneEventHandler(scene.get(), hud.get(), viewer ) );
 
 	osg::Group* root = new osg::Group;
@@ -424,8 +655,12 @@ int main(int argc, char *argv[])
 
 	viewer.realize();
 
+	osg::Vec3f eye,centre,up;
+
 	while(!viewer.done())
 	{
 		viewer.frame();	
 	}
+
+	return 0;
 }

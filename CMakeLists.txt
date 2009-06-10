@@ -2,7 +2,7 @@
 # refer to the root source directory of the project as ${osgOcean_SOURCE_DIR}
 # to the root binary directory of the project as ${osgOcean_BINARY_DIR}.
 
-cmake_minimum_required (VERSION 2.6)
+cmake_minimum_required (VERSION 2.6 FATAL_ERROR)
 
 project (osgOcean)
 
@@ -37,8 +37,10 @@ include_directories (${OSGTEXT_INCLUDE_DIR})
 find_package (OpenThreads REQUIRED)
 include_directories(${OPENTHREADS_INCLUDE_DIR})
 
-find_package (fftw3f-3 REQUIRED)
-include_directories (${FFTW3F-3_INCLUDE_DIR})
+find_package (fftss REQUIRED)
+include_directories (${FFTSS_INCLUDE_DIR})
 
+find_package (OpenGL REQUIRED)
+include_directories (${OPENGL_INCLUDE_DIR})
 
 add_subdirectory (src)
