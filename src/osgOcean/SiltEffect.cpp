@@ -106,7 +106,7 @@ SiltEffect::SiltEffect()
 {
     setNumChildrenRequiringUpdateTraversal(1);
 
-    setUpGeometries(1024);
+    setUpGeometries(1920);
 
     setIntensity(0.5);
 }

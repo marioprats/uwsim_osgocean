@@ -162,7 +162,7 @@ OceanScene::OceanScene( void )
     ,_enableDefaultShader        ( true )
     ,_reflectionTexSize          ( 512,512 )
     ,_refractionTexSize          ( 512,512 )
-    ,_screenDims                 ( 1024,768 )
+    ,_screenDims                 ( 1920,1080 )
     ,_sunDirection               ( 0,0,-1 )
     ,_reflectionUnit             ( 1 )
     ,_refractionUnit             ( 2 )
@@ -237,7 +237,7 @@ OceanScene::OceanScene( OceanTechnique* technique )
     ,_enableDefaultShader        ( true )
     ,_reflectionTexSize          ( 512,512 )
     ,_refractionTexSize          ( 512,512 )
-    ,_screenDims                 ( 1024,768 )
+    ,_screenDims                 ( 1920, 1080 )
     ,_sunDirection               ( 0,0,-1 )
     ,_reflectionUnit             ( 1 )
     ,_refractionUnit             ( 2 )
@@ -855,7 +855,8 @@ void OceanScene::traverse( osg::NodeVisitor& nv )
         {
             osg::Camera* currentCamera = cv->getCurrentRenderBin()->getStage()->getCamera();
             if (currentCamera->getName() == "ShadowCamera" ||
-                currentCamera->getName() == "AnalysisCamera" )
+                currentCamera->getName() == "AnalysisCamera" ||
+		currentCamera->getName() == "CamViewCamera")
             {
                 // Do not do reflections and everything if we're in a shadow pass.
                 osg::Group::traverse(nv);

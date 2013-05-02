@@ -60,7 +60,7 @@ FFTOceanTechnique::FFTOceanTechnique( unsigned int FFTGridSize,
     ,_numLevels      ( (unsigned int) ( log( (float)_tileSize) / log(2.f) )+1)
     ,_startPos       ( -float( (_tileResolution+1)*_numTiles) * 0.5f, float( (_tileResolution+1)*_numTiles) * 0.5f )
     ,_THRESHOLD      ( 3.f )
-    ,_VRES           ( 1024 )
+    ,_VRES           ( 1920 )
     ,_NUMFRAMES      ( numFrames )
     ,_waveTopColor   ( 0.192156862f, 0.32549019f, 0.36862745098f )
     ,_waveBottomColor( 0.11372549019f, 0.219607843f, 0.3568627450f )
