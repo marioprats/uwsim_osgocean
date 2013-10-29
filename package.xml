@@ -4,7 +4,7 @@
   <version>1.0.2</version>
   <description>The OSG Ocean library adapted to UWSim. See https://code.google.com/p/osgocean</description>
 
-  <maintainer email="mprats@willowgarage.com">Mario Prats</maintainer>
+  <maintainer email="marioprats@gmail.com">Mario Prats</maintainer>
   <license>LGPL</license>
 
   <buildtool_depend>cmake</buildtool_depend>
