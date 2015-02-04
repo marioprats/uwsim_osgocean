@@ -18,6 +18,7 @@ ENDIF()
 
 SET(CMAKE_DEBUG_POSTFIX "d" CACHE STRING "add a postfix, usually d")
 SET(CMAKE_RELEASE_POSTFIX "" CACHE STRING "add a postfix, usually empty")
+#Saucy build has relwithdebinfo option, so we need to create the same library name
 SET(CMAKE_RELWITHDEBINFO_POSTFIX "" CACHE STRING "add a postfix, usually rd")
 SET(CMAKE_MINSIZEREL_POSTFIX "s" CACHE STRING "add a postfix, usually s")
 
